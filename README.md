@@ -13,3 +13,9 @@ Bambdas are lightweight, reusable Java-based scripts that run directly from Burp
 - Support for AI-powered features for smarter workflows 
 - Reusable across projects through Bambda library
 
+## Scripts 
+- 403-bypass
+- Burp Quick Fuzzer
+- Request Attacker
+- HTTP Method Fuzzer
+
