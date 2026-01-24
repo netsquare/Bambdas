@@ -10,11 +10,9 @@
 
 ## Usage
 
-
-
 https://github.com/user-attachments/assets/f4e56b99-b8ed-473c-a4f1-7201d513a944
 
-https://github.com/user-attachments/assets/b8fb43fd-9121-429b-8735-09a00018edc7
+https://github.com/user-attachments/assets/a5fa0a53-ac82-40ca-aacf-9ee19657cfba
 
 1. Clone this repo.
 2. Open Burp Suite.
