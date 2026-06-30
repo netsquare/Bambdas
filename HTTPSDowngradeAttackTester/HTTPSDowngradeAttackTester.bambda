@@ -1,0 +1,40 @@
+id: 69d4c0c3-560b-4266-98ba-a2390d45356c
+name: HTTPSDowngradeAttackTester
+function: CUSTOM_ACTION
+location: REPEATER
+source: "/*\n* HTTPS Downgrade Attack Tester Custom Action by Nikunj Sapara\n* https://github.com/nikunjsapara\n\
+  * Identifies whether the target domain is vulnerable to HTTPS downgrade attacks\
+  \ or not.\n*/\n\n// Fetch original request data\r\nvar originalRequest = requestResponse.request();\n\
+  var originalhttpService = requestResponse.httpService();\nString originalHost =\
+  \ originalhttpService.host();\r\nint originalPort = originalhttpService.port();\n\
+  \nlogging.logToOutput(\"----- HTTPS Downgrade Attack Test Started -----\\nTarget:\
+  \ \" + originalHost + \":\" + originalPort);\nif (!originalhttpService.secure())\
+  \ {\n    logging.logToOutput(\"[!] VULNERABLE: No HTTPS enforcement on \" + originalHost);\n\
+  \    return;\n}\nlogging.logToOutput(\"Original HTTP Protocol: HTTPS\"); \ntry {\n\
+  \    // Fetch original response\r\n    logging.logToOutput(\"Fetching original response\
+  \ with HTTPS protocol\");\n    var originalResult = api.http().sendRequest(originalRequest);\n\
+  \    int originalStatus = originalResult.response().statusCode();\n    int originalLength\
+  \ = originalResult.response().body().length();\n    logging.logToOutput(\"Original\
+  \ response: Status code:\" + originalStatus + \", Length: \" + originalLength);\n\
+  \    // Store original request & response in Organizer\n    originalResult.annotations().setNotes(\"\
+  HTTPS Downgrade Attack Tester: Original request & response\");\n    api.organizer().sendToOrganizer(originalResult);\n\
+  \    \n    // Create insecure service (HTTP)\n    int insecurePort = (originalPort\
+  \ == 443) ? 80 : originalPort;\n    var insecureService = burp.api.montoya.http.HttpService.httpService(originalHost,\
+  \ insecurePort, false);\n    // Build insecure request (HTTP)\n    var insecurerequest\
+  \ = burp.api.montoya.http.message.requests.HttpRequest.httpRequest(insecureService,\
+  \ originalRequest.toByteArray());\n    \n    // Fetch resonse of insecure request\
+  \ (HTTP)\n    var insecureResult = api.http().sendRequest(insecurerequest);\n  \
+  \  int insecureStatus = insecureResult.response().statusCode();\n    int insecureLength\
+  \ = insecureResult.response().body().length();\n    logging.logToOutput(\"Modified\
+  \ response: Status Code: \" + insecureStatus + \", Length: \" + insecureLength);\n\
+  \    // Store insecure request & response in Organizer\n    insecureResult.annotations().setNotes(\"\
+  HTTPS Downgrade Attack Tester: Insecure request & response\");\n    api.organizer().sendToOrganizer(insecureResult);\n\
+  \    \n    // Automatic analysis\n    if (originalStatus == insecureStatus || (insecureStatus\
+  \ >= 200 && insecureStatus < 300)) {\n        logging.logToOutput(\"[!] VULNERABLE:\
+  \ Status Code \" + insecureStatus + \" received over plain HTTP protocol\");\n \
+  \   }\n    else if (insecureStatus >= 300 && insecureStatus < 400) {\n        logging.logToOutput(\"\
+  [+] SECURE: Server redirected. Status code: \" + insecureStatus + \" Location: \"\
+  \ + insecureResult.response().headerValue(\"Location\"));\n    } \n    else {\n\
+  \        logging.logToOutput(\"[-] NEUTRAL: Status Code:\" + insecureStatus + \"\
+  , Length: \" + insecureLength);\n    }\n} catch (Exception e) {\n    logging.logToOutput(\"\
+  [-] Error during execution: \" + e.getMessage());\n}"
