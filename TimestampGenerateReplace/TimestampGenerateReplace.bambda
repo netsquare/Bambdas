@@ -1,0 +1,20 @@
+id: 9d0890cc-e480-44c7-be5e-5828db050adc
+name: TimestampGenerateReplace
+function: CUSTOM_ACTION
+location: REPEATER
+source: "/*\n* Timestamp Generate & Replace Custom Action by Nikunj Sapara\n* https://github.com/nikunjsapara\n\
+  * Generates a timestamp and replaces the following placeholders in the request:\n\
+  * <EPOCH> : Epoch timestamp in seconds.\r\n* <EPOCHMILLI> : Epoch timestamp in milliseconds.\n\
+  */\n\nString request = requestResponse.request().toString();\r\nboolean hasEpoch\
+  \ = request.contains(\"<EPOCH>\");\r\nboolean hasEpochMilli = request.contains(\"\
+  <EPOCHMILLI>\");\r\nlong epochMillis = System.currentTimeMillis();\r\n\nlogging.logToOutput(\"\
+  --------------------------------------\");\n\nif (!hasEpoch && !hasEpochMilli) {\n\
+  \tlogging.logToOutput(\"No <EPOCH>, <EPOCHMILLI> placeholder found.\\nGenerated\
+  \ epoch timestamp in seconds is \" + (epochMillis / 1000) + \" and in milliseconds\
+  \ is \" + epochMillis);\n    return;\n}\nif (hasEpoch) {\r\n    String epochSecondsStr\
+  \ = String.valueOf(epochMillis / 1000);\r\n    httpEditor.requestPane().replace(\"\
+  <EPOCH>\", epochSecondsStr);\r\n    logging.logToOutput(\"<EPOCH> replaced with:\
+  \ \" + epochSecondsStr);\r\n}\r\nif (hasEpochMilli) {\r\n    String epochMilliStr\
+  \ = String.valueOf(epochMillis);\r\n    httpEditor.requestPane().replace(\"<EPOCHMILLI>\"\
+  , epochMilliStr);\r\n    logging.logToOutput(\"<EPOCHMILLI> replaced with: \" +\
+  \ epochMilliStr);\r\n}"
