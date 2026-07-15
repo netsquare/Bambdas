@@ -20,6 +20,7 @@ Bambdas are lightweight, reusable Java-based scripts that run directly from Burp
 - HTTP Method Fuzzer
 - HTTPS Downgrade Attack Tester
 - Timestamp Generate Replace
+- JWT Attacker
 
 ## ⭐ Contributors
 
@@ -42,6 +43,12 @@ Thanks to these wonderful people for their contributions ⭐
       <a href="https://github.com/nikunjsapara">
         <img src="https://avatars.githubusercontent.com/u/61574249?v=4" width="30px;" alt=""/>
         <br /><sub><b>Nikunj Sapara</b></sub>
+      </a>
+    </td>
+    <td>
+      <a href="https://github.com/ns-sourav">
+        <img src="https://avatars.githubusercontent.com/u/154027360?v=4" width="30px;" alt=""/>
+        <br /><sub><b>Sourav Banerjee</b></sub>
       </a>
     </td>
   </tr>
