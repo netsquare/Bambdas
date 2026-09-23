@@ -1,0 +1,157 @@
+id: 279ea0ab-3f42-4f58-92e6-1e5fafbe4c75
+name: BadHTTPRequestFuzzer
+function: CUSTOM_ACTION
+location: REPEATER
+source: "/*\r\n* Bad HTTP Request Fuzzer Custom Action by Nikunj Sapara\n* https://github.com/nikunjsapara\n\
+  * Identifies how the server behaves when bad HTTP request sent.\r\n*/\r\n\r\n//Configure\
+  \ large payload size\r\nfinal String LARGE_PAYLOAD = \"A\".repeat(10000);\r\n//Configure\
+  \ oversized Content-Length value\r\nfinal String OVERFLOW_CL = \"9999999999999999999999\"\
+  ;\r\n\r\n// Capture original request data\r\nvar originalRequest = requestResponse.request();\r\
+  \nvar originalHttpService = requestResponse.httpService();\r\nvar originalHTTPMethod\
+  \ = originalRequest.method();\r\nvar originalPath = originalRequest.path();\r\n\
+  var originalHTTPVersion = originalRequest.httpVersion();\r\nString originalReqLine\
+  \ = originalHTTPMethod + \" \" + originalPath + \" \" + originalHTTPVersion;\r\n\
+  int executed = 0;\r\nint failed = 0;\r\nString originalFullRequestStr = originalRequest.toString();\r\
+  \nint firstCrLfIndex = originalFullRequestStr.indexOf(\"\\r\\n\");\r\nString originalHeadersAndBody\
+  \ = (firstCrLfIndex != -1) ? originalFullRequestStr.substring(firstCrLfIndex) :\
+  \ \"\\r\\n\\r\\n\";\r\n\r\nlogging.logToOutput(\"----- Bad HTTP Request Fuzzer Started\
+  \ -----\");\r\nlogging.logToOutput(\"[Info] Target: \" + originalHttpService.host()\
+  \ + \":\" + originalHttpService.port());\r\nif (originalHTTPVersion.contains(\"\
+  2\")) {\r\n    logging.logToOutput(\"[!] Alert: The original request uses HTTP/2.\
+  \ Raw string manipulations might fail or behave unexpectedly due to HTTP/2 framing.\
+  \ Downgrade to HTTP/1.1 for best results. Proceeding anyway...\");\r\n}\r\nif (!api.scope().isInScope(originalRequest.url()))\
+  \ {\r\n    logging.logToOutput(\"[-] Request is out of scope. Aborting fuzzer to\
+  \ prevent unauthorized testing.\\n----- Bad HTTP Request Fuzzer Completed -----\"\
+  );\r\n    return;\r\n}\r\n\r\n// List of bad request cases\r\nvar badReqCaseList\
+  \ = List.of(\r\n    Map.entry(\"Send empty request (send nothing)\", HttpRequest.httpRequest(originalHttpService,\
+  \ \"\")),\r\n    Map.entry(\"Send request containing only CRLF\", HttpRequest.httpRequest(originalHttpService,\
+  \ \"\\r\\n\")),\r\n    Map.entry(\"Send request containing only HTTP method\", HttpRequest.httpRequest(originalHttpService,\
+  \ \"GET\\r\\n\")),\r\n    Map.entry(\"Send request containing only HTTP method and\
+  \ URI\", HttpRequest.httpRequest(originalHttpService, originalHTTPMethod + \" \"\
+  \ + originalPath + \"\\r\\n\")),\r\n    Map.entry(\"Send request with only first\
+  \ HTTP request line\", HttpRequest.httpRequest(originalHttpService, originalReqLine\
+  \ + \"\\r\\n\")),\r\n    Map.entry(\"Send request without space between URI and\
+  \ HTTP version\", HttpRequest.httpRequest(originalHttpService, originalHTTPMethod\
+  \ + \" \" + originalPath + originalHTTPVersion + originalHeadersAndBody)),\r\n \
+  \   Map.entry(\"Send request line with extra token after HTTP version\", HttpRequest.httpRequest(originalHttpService,\
+  \ originalReqLine + \" EXTRA\" + \"\\r\\n\")),\r\n    Map.entry(\"Send request without\
+  \ HTTP method\", originalRequest.withMethod(\"\")),\r\n    Map.entry(\"Send request\
+  \ with non-existent HTTP method\", originalRequest.withMethod(\"TEST\")),\r\n  \
+  \  Map.entry(\"Send request with special character as HTTP method\", originalRequest.withMethod(\"\
+  ~!@#$%^&*()_+-=\")),\r\n    Map.entry(\"Send request with very long HTTP method\"\
+  , originalRequest.withMethod(LARGE_PAYLOAD)),\r\n    Map.entry(\"Send request with\
+  \ leading spaces before method\", originalRequest.withMethod(\"     \" + originalHTTPMethod)),\r\
+  \n    Map.entry(\"Send request URI without leading slash\", HttpRequest.httpRequest(originalHttpService,\
+  \ originalHTTPMethod + \" \" + originalPath.replaceFirst(\"^/\", \"\") + \" \" +\
+  \ originalHTTPVersion + originalHeadersAndBody)),\r\n    Map.entry(\"Send request\
+  \ without endpoint (single space)\", originalRequest.withPath(\" \")),\r\n    Map.entry(\"\
+  Send request with malformed endpoint (Special character)\", originalRequest.withPath(\"\
+  ~!@$%^&*()_+-=.\")),\r\n    Map.entry(\"Send request with very long endpoint\",\
+  \ originalRequest.withPath(\"/\" + LARGE_PAYLOAD)),\r\n    Map.entry(\"Send request\
+  \ with absolute URI in request line\", originalRequest.withPath(\"http://\" + originalHttpService.host()\
+  \ + originalPath)),\r\n    Map.entry(\"Send request with fragment (#) in URI (RFC\
+  \ violation)\", originalRequest.withPath(originalPath + \"#illegal-fragment\")),\r\
+  \n    Map.entry(\"Send request with raw null byte in URI\", HttpRequest.httpRequest(originalHttpService,\
+  \ originalHTTPMethod + \" \" + originalPath + \"\\u0000 \" + originalHTTPVersion\
+  \ + originalHeadersAndBody)),\r\n    Map.entry(\"Send request with Asterisk (*)\
+  \ as URI (OPTIONS style)\", originalRequest.withPath(\"*\")),\r\n    Map.entry(\"\
+  Send request with HTTP/0.9\", HttpRequest.httpRequest(originalHttpService, originalHTTPMethod\
+  \ + \" \" + originalPath + \" HTTP/0.9\" + originalHeadersAndBody)),\r\n    Map.entry(\"\
+  Send request with HTTP/1.0\", HttpRequest.httpRequest(originalHttpService, originalHTTPMethod\
+  \ + \" \" + originalPath + \" HTTP/1.0\" + originalHeadersAndBody)),\r\n    Map.entry(\"\
+  Send request without HTTP version\", HttpRequest.httpRequest(originalHttpService,\
+  \ originalHTTPMethod + \" \" + originalPath + \" \" + originalHeadersAndBody)),\r\
+  \n    Map.entry(\"Send request with non-existent HTTP version\", HttpRequest.httpRequest(originalHttpService,\
+  \ originalHTTPMethod + \" \" + originalPath + \" HTTP/10\" + originalHeadersAndBody)),\r\
+  \n    Map.entry(\"Send request with invalid HTTP version format\", HttpRequest.httpRequest(originalHttpService,\
+  \ originalHTTPMethod + \" \" + originalPath + \" HTTP1.1\" + originalHeadersAndBody)),\r\
+  \n    Map.entry(\"Send request with non-numeric HTTP version\", HttpRequest.httpRequest(originalHttpService,\
+  \ originalHTTPMethod + \" \" + originalPath + \" HTTP/A.B\" + originalHeadersAndBody)),\r\
+  \n    Map.entry(\"Send request line with trailing spaces after HTTP version\", HttpRequest.httpRequest(originalHttpService,\
+  \ originalReqLine + \"   \" + originalHeadersAndBody)),\r\n    Map.entry(\"Send\
+  \ request missing 'HTTP/' prefix in version (e.g., just '1.1')\", HttpRequest.httpRequest(originalHttpService,\
+  \ originalHTTPMethod + \" \" + originalPath + \" \" + originalHTTPVersion.replace(\"\
+  HTTP/\", \"\") + originalHeadersAndBody)),\r\n    Map.entry(\"Send request without\
+  \ host header\", originalRequest.withRemovedHeader(\"Host\")),\r\n    Map.entry(\"\
+  Send request without host header value\", originalRequest.withUpdatedHeader(\"Host\"\
+  , \"\")),\r\n    Map.entry(\"Send request with arbitrary host header value\", originalRequest.withUpdatedHeader(\"\
+  Host\", \"127.0.0.1\")),\r\n    Map.entry(\"Send request with newline between host:\
+  \ header and value:\", originalRequest.withUpdatedHeader(\"Host\", \"\\r\\n\" +\
+  \ originalHttpService.host())),\r\n    Map.entry(\"Send request with very long host\
+  \ header value\", originalRequest.withUpdatedHeader(\"Host\", LARGE_PAYLOAD + \"\
+  .com\")),\r\n    Map.entry(\"Send request without colon between host header and\
+  \ value\", HttpRequest.httpRequest(originalHttpService, originalFullRequestStr.replaceFirst(\"\
+  (?im)^Host:\\\\s*\", \"Host \"))),\r\n    Map.entry(\"Send request with duplicate\
+  \ Host headers\", originalRequest.withAddedHeader(\"Host\", \"127.0.0.1\")),\r\n\
+  \    Map.entry(\"Send request with out-of-bounds port in Host header\", originalRequest.withUpdatedHeader(\"\
+  Host\", originalHttpService.host() + \":9999999\")),\r\n    Map.entry(\"Send request\
+  \ with non-numeric port in Host header\", originalRequest.withUpdatedHeader(\"Host\"\
+  , originalHttpService.host() + \":invalidPort\")),\r\n    Map.entry(\"Send request\
+  \ with negative port in Host header\", originalRequest.withUpdatedHeader(\"Host\"\
+  , originalHttpService.host() + \":-80\")),\r\n    Map.entry(\"Send request with\
+  \ space before header colon\", HttpRequest.httpRequest(originalHttpService, originalFullRequestStr.replaceFirst(\"\
+  (?im)^Host:\", \"Host :\"))),\r\n    Map.entry(\"Send request with leading whitespace\
+  \ on header name\", HttpRequest.httpRequest(originalHttpService, originalFullRequestStr.replaceFirst(\"\
+  (?im)^Host:\", \" Host:\"))),\r\n    Map.entry(\"Send request with malformed header\
+  \ line consisting only of colon\", HttpRequest.httpRequest(originalHttpService,\
+  \ originalFullRequestStr.replaceFirst(\"\\r\\n\", \"\\r\\n:\\r\\n\"))),\r\n    Map.entry(\"\
+  Send request with empty header name\", HttpRequest.httpRequest(originalHttpService,\
+  \ originalFullRequestStr.replaceFirst(\"\\r\\n\", \"\\r\\n: SomeValue\\r\\n\"))),\r\
+  \n    Map.entry(\"Send request with raw null byte in header value\", originalRequest.withUpdatedHeader(\"\
+  Host\", originalHttpService.host() + \"\\u0000\")),\r\n    Map.entry(\"Send request\
+  \ with non-ASCII characters in header name\", HttpRequest.httpRequest(originalHttpService,\
+  \ originalFullRequestStr.replaceFirst(\"\\r\\n\", \"\\r\\nBäd-Hëader: testvalue\\\
+  r\\n\"))),\r\n    Map.entry(\"Send request with extremely long header name\", HttpRequest.httpRequest(originalHttpService,\
+  \ originalFullRequestStr.replaceFirst(\"\\r\\n\", \"\\r\\n\" + LARGE_PAYLOAD + \"\
+  : test\\r\\n\"))),\r\n    Map.entry(\"Send request with extremely long header value\"\
+  , originalRequest.withAddedHeader(\"X-Fuzz-Value\", LARGE_PAYLOAD)),\r\n    Map.entry(\"\
+  Send request with excessive number of headers (150+ dummy headers)\", HttpRequest.httpRequest(originalHttpService,\
+  \ originalFullRequestStr.replaceFirst(\"\\r\\n\\r\\n\", \"\\r\\n\" + \"X-Fuzz-Header:\
+  \ test\\r\\n\".repeat(150) + \"\\r\\n\"))),\r\n    Map.entry(\"Send request with\
+  \ negative Content-Length\", originalRequest.withUpdatedHeader(\"Content-Length\"\
+  , \"-100\")),\r\n    Map.entry(\"Send request with non-numeric Content-Length\"\
+  , originalRequest.withUpdatedHeader(\"Content-Length\", \"invalid\")),\r\n    Map.entry(\"\
+  Send request with massive Content-Length (Integer Overflow test)\", originalRequest.withUpdatedHeader(\"\
+  Content-Length\", OVERFLOW_CL)),\r\n    Map.entry(\"Send request with unsupported\
+  \ Transfer-Encoding value\", originalRequest.withAddedHeader(\"Transfer-Encoding\"\
+  , \"super-chunked\")),\r\n    Map.entry(\"Send request with Expect: 100-continue\
+  \ but no body\", originalRequest.withAddedHeader(\"Expect\", \"100-continue\")),\r\
+  \n    Map.entry(\"Send request with invalid Expect header value\", originalRequest.withAddedHeader(\"\
+  Expect\", \"999-unknown\")),\r\n    Map.entry(\"Send request without header-body\
+  \ separator CRLF\", HttpRequest.httpRequest(originalHttpService, originalFullRequestStr.replaceFirst(\"\
+  \\r\\n\\r\\n\", \"\\r\\n\"))),\r\n    Map.entry(\"Send request using only LF instead\
+  \ of CRLF\", HttpRequest.httpRequest(originalHttpService, originalFullRequestStr.replace(\"\
+  \\r\\n\", \"\\n\"))),\r\n    Map.entry(\"Send request with tabs instead of spaces\"\
+  , HttpRequest.httpRequest(originalHttpService, originalFullRequestStr.replace(\"\
+  \ \", \"\\t\")))\r\n);\r\n\nMap<Short, Long> statusCodes = new TreeMap<>();\r\n\
+  for (int i = 0; i < badReqCaseList.size(); i++) {\r\n    var badReqCase = badReqCaseList.get(i);\r\
+  \n    try {\r\n        long startTime = System.currentTimeMillis();\r\n        var\
+  \ response = api.http().sendRequest(badReqCase.getValue());\r\n        long duration\
+  \ = System.currentTimeMillis() - startTime;\r\n        response.annotations().setNotes(\"\
+  [\" + (i + 1) + \"] \" + badReqCase.getKey());\r\n        short statusCode = 0;\r\
+  \n        int length = 0;\r\n        var httpResponse = response.response(); \r\n\
+  \        if (httpResponse != null) {\r\n            statusCode = httpResponse.statusCode();\r\
+  \n            length = (httpResponse.body() != null) ? httpResponse.body().length()\
+  \ : 0;\r\n        }\r\n        if (statusCode >= 500) {\r\n            response.annotations().setHighlightColor(HighlightColor.RED);\r\
+  \n        } else if (statusCode == 200 || statusCode == 201) {\r\n            response.annotations().setHighlightColor(HighlightColor.CYAN);\
+  \ \r\n        } else if (statusCode == 0) {\r\n            response.annotations().setHighlightColor(HighlightColor.YELLOW);\r\
+  \n        } else if (statusCode == 1337) {\r\n            response.annotations().setHighlightColor(HighlightColor.BLUE);\r\
+  \n        } else {\r\n            response.annotations().setHighlightColor(HighlightColor.GRAY);\r\
+  \n        }\r\n        api.organizer().sendToOrganizer(response);\r\n        executed++;\r\
+  \n        if (statusCode == 0) {\r\n            logging.logToOutput(\"[\" + (i +\
+  \ 1) + \"/\" + badReqCaseList.size() + \"]: \" + badReqCase.getKey() + \" -> No\
+  \ HTTP response received\" + \" | Duration: \" + duration + \"ms\");\r\n       \
+  \ }\r\n        else {\r\n            logging.logToOutput(\"[\" + (i + 1) + \"/\"\
+  \ + badReqCaseList.size() + \"]: \" + badReqCase.getKey() + \" -> Status: \" + statusCode\
+  \ + \" | Length: \" + length + \" | Duration: \" + duration + \"ms\");\r\n     \
+  \   }\r\n        statusCodes.merge(statusCode, 1L, Long::sum);\r\n    }\r\n    catch(Exception\
+  \ e) {\r\n        failed++;\r\n        logging.logToOutput(\"[-] Error during execution\
+  \ of \" + badReqCase.getKey() + \" : \" + e.getClass().getSimpleName() + \": \"\
+  \ + e.getMessage());\r\n    }\r\n}\r\nlogging.logToOutput(\"---\\n[Info] Status\
+  \ Code Statistics:\");\r\nstatusCodes.forEach((code, count) -> {\r\n\tString label\
+  \ = (code == 0) ? \"Status 0 (Dropped/Timeout)\" : \"Status \" + code;\r\n\tlogging.logToOutput(label\
+  \ + \": \" + count + \" occurrences\");\r\n});\r\nlogging.logToOutput(\"[Info] Total\
+  \ Cases: \" + badReqCaseList.size() + \", Executed: \" + executed + \", Failed to\
+  \ Execute: \" + failed);\r\nlogging.logToOutput(\"[Info] Refer to Organizer for\
+  \ saved requests & responses for further analysis.\\n----- Bad HTTP Request Fuzzer\
+  \ Completed -----\");"

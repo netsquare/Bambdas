@@ -21,6 +21,7 @@ Bambdas are lightweight, reusable Java-based scripts that run directly from Burp
 - HTTPS Downgrade Attack Tester
 - Timestamp Generate Replace
 - JWT Attacker
+- Bad HTTP Request Fuzzer
 
 ## ⭐ Contributors
 
