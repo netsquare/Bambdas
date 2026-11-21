@@ -1,0 +1,602 @@
+id: 9e522180-ed18-42f5-a375-761d9d64a131
+name: UUIDAnalyzerGenerator
+function: CUSTOM_ACTION
+location: REPEATER
+source: "/**\n* UUID Analyzer and Generator: Dynamically replaces UUID placeholders\
+  \ in Repeater and passively scans request/response for UUID related vulnerabilities.\n\
+  *\n* @author Nikunj Sapara (https://github.com/nikunjsapara)\n*\n* Supported Placeholders:\r\
+  \n* - <UUID:nil>               : Replaces with the all-zero Nil UUID.\r\n* - <UUID:max>\
+  \ / <uuid:max>  : Replaces with the all-ones Max UUID (upper or lower case).\r\n\
+  * - <UUID>                   : Auto-detects the first UUID version in the request/response,\
+  \ or defaults to v4.\r\n* - <UUIDv4>                 : Replaces with a cryptographically\
+  \ secure, random v4 UUID.\r\n* - <UUIDv1>, <UUIDv6-8>     : Replaces with a structurally\
+  \ valid \"fake\" UUID of the requested version.\r\n* - <UUIDv3:ns:name>        \
+  \ : Deterministic MD5 UUID (ns = UUID or aliases like DNS, URL, OID, X500).\r\n\
+  * - <UUIDv5:ns:name>         : Deterministic SHA-1 UUID (ns = UUID or aliases like\
+  \ DNS, URL, OID, X500).\r\n* - <UUIDvX_Y>               : Indexed (e.g., <UUID_1>,\
+  \ <UUIDv4_2>) to generate distinct UUIDs within a single request.\r\n**/\n\nlong\
+  \ startTime = System.currentTimeMillis();\nlogging.logToOutput(\"----- UUID Analyzer\
+  \ & Generator Started -----\");\n\nif (requestResponse == null || requestResponse.request()\
+  \ == null) {\r\n    logging.logToOutput(\"[ERROR] Execution aborted: No request\
+  \ configured.\");\r\n    return;\r\n}\nvar httpReq = requestResponse.request();\n\
+  if (httpReq.toString().trim().isEmpty()) {\r\n    logging.logToOutput(\"[ERROR]\
+  \ Execution aborted: The Request pane is empty. Please add a valid HTTP request.\"\
+  );\r\n    return;\r\n}\nString originalUrl;\ntry {\n    originalUrl = httpReq.url();\n\
+  \    if (originalUrl == null || originalUrl.isEmpty()) {\n        logging.logToOutput(\"\
+  [ERROR] Execution aborted: Target URL is empty.\");\r\n        return;\r\n    }\r\
+  \n} catch (Exception e) {\r\n    logging.logToOutput(\"[ERROR] Execution aborted:\
+  \ Target configuration missing or Request is severely malformed.\");\r\n    return;\r\
+  \n}\n\nPattern uuidPattern = Pattern.compile(\"(?<![0-9a-fA-F])[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(?![0-9a-fA-F])\"\
+  );\r\nvar httpRes = requestResponse.response();\nString originalReq = httpReq.toString();\n\
+  String originalRes = httpRes != null ? httpRes.toString() : \"\";\nString reqPathLower,\
+  \ reqBodyLower, resBodyLower;\nreqPathLower = reqBodyLower = resBodyLower = null;\n\
+  var reqHeaders = httpReq.headers();\nvar reqParams = httpReq.parameters();\nvar\
+  \ resHeaders = httpRes != null ? httpRes.headers() : null;\nboolean cachesBuilt,\
+  \ detectedVersionFound;\ncachesBuilt = detectedVersionFound = false;\nArrayList<String[]>\
+  \ reqHeadersCache = new ArrayList<>();\r\nArrayList<String[]> reqParamsCache = new\
+  \ ArrayList<>();\r\nArrayList<String[]> resHeadersCache = new ArrayList<>();\r\n\
+  StringBuilder notes = new StringBuilder(1024);\r\nHashSet<String> seenUuids = new\
+  \ HashSet<>();\nint detectedVersion = 4;\nint initialCount = 0;\r\nList<burp.api.montoya.scanner.audit.issues.AuditIssue>\
+  \ existingUrlIssues = null;\nfinal long UUID_EPOCH_OFFSET = 0x01B21DD213814000L;\
+  \ // 1582-10-15 Gregorian Offset\nboolean hasPlaceholder = originalReq.contains(\"\
+  <UUID\") || originalReq.contains(\"<uuid\");\nPattern placeholderPattern = hasPlaceholder\
+  \ ? Pattern.compile(\"<UUID(?:v([1-8]))?(?:_\\\\d+)?(?::([^>]+))?>\", Pattern.CASE_INSENSITIVE)\
+  \ : null; // Regex to optionally allow an underscore and index number: <UUIDv4_1>\n\
+  String scanReq = hasPlaceholder ? placeholderPattern.matcher(originalReq).replaceAll(\"\
+  \") : originalReq;\nString[] textTargets = { scanReq, originalRes };\n\n// Passive\
+  \ analysis\nfor (String targetText : textTargets) {\n    if (targetText == null\
+  \ || targetText.isEmpty()) continue;\n    Matcher matcher = uuidPattern.matcher(targetText);\n\
+  \    while (matcher.find()) {\n        if (!cachesBuilt) {\n            reqHeadersCache.ensureCapacity(reqHeaders.size());\n\
+  \            reqHeaders.forEach(h -> reqHeadersCache.add(new String[]{\n       \
+  \         h.name() != null ? h.name() : \"\", \n                h.name() != null\
+  \ ? h.name().toLowerCase(Locale.ROOT) : \"\", \n                h.value() != null\
+  \ ? h.value().toLowerCase(Locale.ROOT) : \"\"\r\n            }));\n            reqParamsCache.ensureCapacity(reqParams.size());\r\
+  \n            reqParams.forEach(p -> { \r\n                if (p.value() != null)\
+  \ {\n                    reqParamsCache.add(new String[]{\n                    \
+  \    (p.name() != null && !p.name().isEmpty()) ? p.name() : \"unnamed_param\", \n\
+  \                        p.type().toString(), \n                        p.value().toLowerCase(Locale.ROOT)\n\
+  \                    }); \r\n                }\r\n            });\n            reqBodyLower\
+  \ = httpReq.bodyToString().toLowerCase(Locale.ROOT);\r\n            if (httpRes\
+  \ != null) {\n                resHeadersCache.ensureCapacity(resHeaders.size());\r\
+  \n                resHeaders.forEach(h -> resHeadersCache.add(new String[]{\n  \
+  \                  h.name() != null ? h.name() : \"\", \n                    h.name()\
+  \ != null ? h.name().toLowerCase(Locale.ROOT) : \"\", \n                    h.value()\
+  \ != null ? h.value().toLowerCase(Locale.ROOT) : \"\"\n                }));\n  \
+  \              resBodyLower = httpRes.bodyToString().toLowerCase(Locale.ROOT);\n\
+  \            }\n            String rawPath = httpReq.pathWithoutQuery();\n     \
+  \       reqPathLower = (rawPath != null) ? rawPath.toLowerCase(Locale.ROOT) : \"\
+  \";\n            cachesBuilt = true;\r\n        }\n        String match = matcher.group().toLowerCase(Locale.ROOT);\n\
+  \        \n        // Skip Standard RFC 9562 - Namespaces to prevent false positives\r\
+  \n        if (match.equals(\"6ba7b810-9dad-11d1-80b4-00c04fd430c8\") || \n     \
+  \       match.equals(\"6ba7b811-9dad-11d1-80b4-00c04fd430c8\") || \n           \
+  \ match.equals(\"6ba7b812-9dad-11d1-80b4-00c04fd430c8\") || \r\n            match.equals(\"\
+  6ba7b814-9dad-11d1-80b4-00c04fd430c8\")) {\n                notes.append(\"[INFO]\
+  \ RFC namespace UUIDs ignored: \").append(match).append(\"\\n\");\n            \
+  \    continue;\r\n        }\n        if (!seenUuids.add(match)) continue;\n    \
+  \    \n        // Fetch and filter issues for this URL.\n        if (existingUrlIssues\
+  \ == null) {\n            String baseTargetUrl = originalUrl.split(\"\\\\?\", 2)[0];\n\
+  \            existingUrlIssues = api().siteMap().issues().stream()\n           \
+  \     .filter(issue -> issue.name() != null && issue.name().contains(\"UUID\"))\n\
+  \                .filter(issue -> issue.requestResponses().stream()\n          \
+  \          .anyMatch(rr -> rr != null && rr.request() != null && rr.request().url()\
+  \ != null && rr.request().url().split(\"\\\\?\", 2)[0].equals(baseTargetUrl)))\n\
+  \                .collect(java.util.stream.Collectors.toList());\r\n           \
+  \ initialCount = existingUrlIssues.size();\r\n        }\n\n        LinkedHashSet<String>\
+  \ locationsContainingUuid = new LinkedHashSet<>();\r\n        for (String[] h :\
+  \ reqHeadersCache) {\n            if (h[1].contains(match) || h[2].contains(match))\
+  \ locationsContainingUuid.add(\"Request Header [\" + h[0] + \"]\");\r\n        }\r\
+  \n        boolean foundInBodyParam = false;\r\n        for (String[] p : reqParamsCache)\
+  \ {\n            if (p[2].contains(match)) {\n                locationsContainingUuid.add(\"\
+  Request \" + p[1] + \" Parameter [\" + p[0] + \"]\");\n                if (!p[1].equalsIgnoreCase(\"\
+  URL\") && !p[1].equalsIgnoreCase(\"COOKIE\")) foundInBodyParam = true;\r\n     \
+  \       }\r\n        }\n        if (!foundInBodyParam && reqBodyLower != null &&\
+  \ reqBodyLower.contains(match)) {\n            locationsContainingUuid.add(\"Request\
+  \ Body\");\r\n        }\r\n        if (reqPathLower.contains(match)) {\n       \
+  \     locationsContainingUuid.add(\"Request Path\");\r\n        } else if (locationsContainingUuid.isEmpty()\
+  \ && originalUrl.toLowerCase(Locale.ROOT).contains(match)) {\n            locationsContainingUuid.add(\"\
+  URL / Query String\");\n        }\n        for (String[] h : resHeadersCache) {\n\
+  \            if (h[1].contains(match) || h[2].contains(match)) locationsContainingUuid.add(\"\
+  Response Header [\" + h[0] + \"]\");\r\n        }\n        if (resBodyLower != null\
+  \ && resBodyLower.contains(match)) {\n            locationsContainingUuid.add(\"\
+  Response Body\");\n        }\n        String locStr = locationsContainingUuid.isEmpty()\
+  \ ? \"Unknown\" : String.join(\", \", locationsContainingUuid);\n\n        if (match.equals(\"\
+  00000000-0000-0000-0000-000000000000\")) {\n            notes.append(\"[-] UUID:\
+  \ \").append(match).append(\" (Nil)\\n    Severity: [LOW]\\n    Issue:    Nil UUID\
+  \ detected (Risk of auth bypass or uninitialized data)\\n    Location: \").append(locStr).append(\"\
+  \\n\\n\");\n            if (existingUrlIssues.stream().noneMatch(issue -> issue.name().equals(\"\
+  Nil UUID detected\"))) {\n                burp.api.montoya.scanner.audit.issues.AuditIssue\
+  \ newIssue = burp.api.montoya.scanner.audit.issues.AuditIssue.auditIssue(\n    \
+  \                \"Nil UUID detected\",\n                    \"The scanner detected\
+  \ the generation, acceptance, or exposure of a Nil UUID within the application.\
+  \ This indicates a silent failure in the UUID generation library (often due to cryptographic\
+  \ entropy exhaustion) or an unassigned object variable. If the application processes\
+  \ this value as a legitimate identifier, it can cause global data collisions, unintended\
+  \ record overwrites, or authorization bypasses by mapping multiple distinct users\
+  \ or resources to the exact same all-zero token. For example, CVE-2025-66565 affected\
+  \ specific Fiber utility versions where RNG failure could silently result in a Nil\
+  \ UUID. <br><br>- Location: \" + locStr + \"<br><br><b><i>This issue was reported\
+  \ by a UUID Analyzer & Generator.</i></b>\", \n                    \"- Implement\
+  \ strict input validation on all API endpoints and database schemas to explicitly\
+  \ reject the Nil UUID. <br>- Audit the application's UUID generation logic to ensure\
+  \ it throws a fatal exception during entropy or PRNG failures rather than silently\
+  \ returning a zeroed string.<br>- Ensure database constraints enforce non-zero requirements\
+  \ for all UUID primary and foreign keys.\", \n                    originalUrl,\n\
+  \                    burp.api.montoya.scanner.audit.issues.AuditIssueSeverity.LOW,\n\
+  \                    burp.api.montoya.scanner.audit.issues.AuditIssueConfidence.CERTAIN,\n\
+  \                    \"The Nil UUID (00000000-0000-0000-0000-000000000000) is defined\
+  \ by RFC 9562; formerly RFC 4122 as a special-case placeholder. It contains zero\
+  \ entropy and is strictly intended to represent an empty, null, or uninitialized\
+  \ state, not a unique entity.\",\n                    \"Because the Nil UUID is\
+  \ a known default state, treating it as valid breaks the fundamental guarantee of\
+  \ universal uniqueness. Robust systems must actively defend against uninitialized\
+  \ defaults to prevent attackers from exploiting predictably zeroed identifiers to\
+  \ access overlapping records.\",\n                    burp.api.montoya.scanner.audit.issues.AuditIssueSeverity.LOW,\n\
+  \                    requestResponse\n                );\n                api().siteMap().add(newIssue);\n\
+  \                existingUrlIssues.add(newIssue);\n            }\n            continue;\n\
+  \        }\r\n        if (match.equals(\"ffffffff-ffff-ffff-ffff-ffffffffffff\"\
+  )) {\n            notes.append(\"[-] UUID: \").append(match).append(\" (Max)\\n\
+  \    Severity: [LOW]\\n    Issue:    Max UUID detected\\n    Location: \").append(locStr).append(\"\
+  \\n\\n\");\n            if (existingUrlIssues.stream().noneMatch(issue -> issue.name().equals(\"\
+  Max UUID detected\"))) {\n                burp.api.montoya.scanner.audit.issues.AuditIssue\
+  \ newIssue = burp.api.montoya.scanner.audit.issues.AuditIssue.auditIssue(\n    \
+  \                \"Max UUID detected\",\n                    \"The scanner detected\
+  \ the generation, acceptance, or exposure of a Max UUID within the application.\
+  \ If the application processes this sentinel value as a legitimate identifier, it\
+  \ can cause global data collisions, unintended record overwrites, or authorization\
+  \ bypasses by mapping multiple distinct users or resources to the exact same all-ones\
+  \ token. <br><br>- Location: \" + locStr + \"<br><br><b><i>This issue was reported\
+  \ by a UUID Analyzer & Generator.</i></b>\", \n                    \"- Implement\
+  \ strict input validation on all API endpoints and database schemas to explicitly\
+  \ reject the Max UUID (ffffffff-ffff-ffff-ffff-ffffffffffff). <br>- Ensure database\
+  \ constraints enforce validation that rejects this all-ones string for all UUID\
+  \ primary and foreign keys. <br>- If using validation libraries (like Zod), ensure\
+  \ custom refinements correctly reject the Max UUID if the underlying library explicitly\
+  \ allows it as a sentinel value.\", \n                    originalUrl,\n       \
+  \             burp.api.montoya.scanner.audit.issues.AuditIssueSeverity.LOW,\n  \
+  \                  burp.api.montoya.scanner.audit.issues.AuditIssueConfidence.CERTAIN,\n\
+  \                    \"The Max UUID (ffffffff-ffff-ffff-ffff-ffffffffffff) is defined\
+  \ by RFC 9562 as a special-case placeholder. It consists of all ones (the highest\
+  \ possible 128-bit unsigned integer) and is strictly intended to be used as a sentinel\
+  \ value such as representing the \\\"end of a UUID list\\\" not as a unique entity\
+  \ identifier.\",\n                    \"Because the Max UUID is a known default\
+  \ sentinel state, treating it as valid breaks the fundamental guarantee of universal\
+  \ uniqueness. Robust systems must actively defend against this placeholder to prevent\
+  \ attackers from exploiting predictably static identifiers to access overlapping\
+  \ records or break database sorting logic.\",\n                    burp.api.montoya.scanner.audit.issues.AuditIssueSeverity.LOW,\n\
+  \                    requestResponse\n                );\n                api().siteMap().add(newIssue);\n\
+  \                existingUrlIssues.add(newIssue);\n            }\n            continue;\r\
+  \n        }\n        try {\n            UUID foundUuid = UUID.fromString(match);\n\
+  \            // Check RFC standard UUID before checking the version\n          \
+  \  if (foundUuid.variant() != 2) {\n                notes.append(\"[-] UUID: \"\
+  ).append(match).append(\" (NCS / Microsoft / Reserved Variant)\\n    Status:   UUID\
+  \ variant is outside the RFC 9562 variant.\\n    Location: \").append(locStr).append(\"\
+  \\n\\n\");\n                continue;\n            }\n            int version =\
+  \ foundUuid.version();\r\n            // Save the first valid version to use as\
+  \ default generator\n            if (!detectedVersionFound && version >= 1 && version\
+  \ <= 8 && version != 2) {\n                detectedVersion = version;\n        \
+  \        detectedVersionFound = true;\n            }\n            notes.append(\"\
+  [-] UUID: \").append(match).append(\" (v\").append(version).append(\")\\n\");\n\
+  \            switch (version) {\n                case 1:\n                    String\
+  \ macAddressNodeID1 = match.substring(24).replaceAll(\"(.{2})(?!$)\", \"$1:\");\n\
+  \                    notes.append(\"    Severity: [LOW]\\n    Issue:    Predictable\
+  \ token & Information Disclosure\\n    Location: \").append(locStr).append(\"\\\
+  n    Leak:     MAC Address / Node ID -> \").append(macAddressNodeID1).append(\"\\\
+  n\");\n                    String timestamp = Instant.ofEpochMilli((foundUuid.timestamp()\
+  \ - UUID_EPOCH_OFFSET) / 10000L).toString();\n                    int clockSeq =\
+  \ foundUuid.clockSequence();\n                    notes.append(\"    Leak:     Timestamp\
+  \   -> \").append(timestamp).append(\"\\n    Leak:     Clock Sequence -> \").append(clockSeq).append(\"\
+  \\n\\n\");\n                    if (existingUrlIssues.stream().noneMatch(issue ->\
+  \ issue.name().equals(\"UUIDv1 detected - Predictable token & Information Disclosure\"\
+  ) && issue.detail() != null && issue.detail().contains(macAddressNodeID1))) {\n\
+  \                        burp.api.montoya.scanner.audit.issues.AuditIssue newIssue\
+  \ = burp.api.montoya.scanner.audit.issues.AuditIssue.auditIssue(\n             \
+  \               \"UUIDv1 detected - Predictable token & Information Disclosure\"\
+  ,\n                            \"The scanner detected the use of UUIDv1. Because\
+  \ the last 48 bits contain the Node ID, which may be an IEEE 802 MAC address, UUIDv1\
+  \ can expose internal host/network information when an actual MAC address is used.\
+  \ If UUIDv1 is used for session IDs, password resets, or direct resource identifiers,\
+  \ perform a separate predictability/security-token assessment.<br><br>- Location:\
+  \ \" + locStr + \"<br><br>The UUIDv1 found in the request/response was generated\
+  \ and includes the following details:<br>- Mac Address / Node ID: \" + macAddressNodeID1\
+  \ + \"<br>- Timestamp: \" + timestamp + \"<br>- Clock Sequence: \" + clockSeq +\
+  \ \"<br><br><b><i>This issue was reported by a UUID Analyzer & Generator.</i></b>\"\
+  , \n                            \"- If the UUID is used as a security-sensitive\
+  \ token, replace it with an identifier generated from a CSPRNG such as UUIDv4 or\
+  \ another appropriate high-entropy token format.<br>- Immediately invalidate and\
+  \ regenerate any existing UUIDv1 tokens that are currently functioning as security\
+  \ tokens, session IDs, or password reset links.<br>- Ensure that all API endpoints\
+  \ using UUIDs for object lookup implement strict authorization checks (like Role-Based\
+  \ Access Control) to verify ownership, rather than relying on the token being unguessable.\"\
+  ,\n                            originalUrl,\n                            burp.api.montoya.scanner.audit.issues.AuditIssueSeverity.LOW,\n\
+  \                            burp.api.montoya.scanner.audit.issues.AuditIssueConfidence.CERTAIN,\n\
+  \                            \"UUID version 1 (UUIDv1) is a time-based UUID containing\
+  \ a 60-bit timestamp, a clock sequence, and a 48-bit Node ID. The Node ID may be\
+  \ an IEEE 802 MAC address or a randomly derived value. It was designed for distributed\
+  \ uniqueness, not cryptographic unpredictability.\",\n                         \
+  \   \"Identifiers used for security, access control, or public-facing APIs must\
+  \ be cryptographically random and should never leak underlying hardware configurations.\
+  \ Relying on sequential, time-based identifiers provides a false sense of security\
+  \ and opens the system to token-guessing attacks.\",\n                         \
+  \   burp.api.montoya.scanner.audit.issues.AuditIssueSeverity.LOW,\n            \
+  \                requestResponse\r\n                        );\n               \
+  \         api().siteMap().add(newIssue);\n                        existingUrlIssues.add(newIssue);\n\
+  \                    }\n                    break;\n                case 2:\n  \
+  \                  String macAddressNodeID2 = match.substring(24).replaceAll(\"\
+  (.{2})(?!$)\", \"$1:\");\n                    String localOrDomainSpecificID = match.substring(0,\
+  \ 8);\n                    notes.append(\"    Severity: [LOW]\\n    Issue:    Predictable\
+  \ token & Information Disclosure\\n    Location: \").append(locStr).append(\"\\\
+  n    Leak:     MAC Address / Node ID -> \").append(macAddressNodeID2).append(\"\\\
+  n    Leak:     Local identifier/domain-specific field: -> \").append(localOrDomainSpecificID).append(\"\
+  \\n\\n\");\n                    if (existingUrlIssues.stream().noneMatch(issue ->\
+  \ issue.name().equals(\"UUIDv2 detected - Predictable token & Information Disclosure\"\
+  ) && issue.detail() != null && issue.detail().contains(macAddressNodeID2))) {\n\
+  \                        burp.api.montoya.scanner.audit.issues.AuditIssue newIssue\
+  \ = burp.api.montoya.scanner.audit.issues.AuditIssue.auditIssue(\n             \
+  \               \"UUIDv2 detected - Predictable token & Information Disclosure\"\
+  ,\n                            \"The scanner detected the use of UUIDv2. This version\
+  \ can expose the Node ID field, which may correspond to a server MAC address when\
+  \ an IEEE 802 address is used, potentially disclosing internal network information\
+  \ to attackers. Additionally, because UUIDv2 truncates the internal timestamp and\
+  \ clock sequence to make room for the local domain ID, it severely degrades collision\
+  \ resistance. So implementations should not assume the same uniqueness properties\
+  \ as a full UUIDv1 timestamp/clock-sequence construction. Finally, its sequential\
+  \ nature makes it trivial to predict, rendering it highly insecure if used for session\
+  \ IDs, password resets, or API authorization tokens.<br><br>- Location: \" + locStr\
+  \ + \"<br><br>The UUIDv2 found in the request/response was generated and includes\
+  \ the following details:<br>- MAC Address / Node ID: \" + macAddressNodeID2 + \"\
+  <br>- Local identifier/domain-specific field: \" + localOrDomainSpecificID + \"\
+  <br><br><b><i>This issue was reported by a UUID Analyzer & Generator.</i></b>\"\
+  , \n                            \"- For security-sensitive identifiers, migrate\
+  \ to a CSPRNG-based identifier such as UUIDv4 or another appropriate high-entropy\
+  \ token format.<br>- Immediately invalidate and regenerate any existing UUIDv2 tokens\
+  \ that currently grant access, act as session identifiers, or serve as password\
+  \ reset links.<br>- Do not rely on UUIDv2's embedded local domain IDs for authorization.\
+  \ Implement robust server-side Access Control (like RBAC) to verify resource ownership.\"\
+  ,\n                            originalUrl,\n                            burp.api.montoya.scanner.audit.issues.AuditIssueSeverity.LOW,\n\
+  \                            burp.api.montoya.scanner.audit.issues.AuditIssueConfidence.CERTAIN,\n\
+  \                            \"UUID version 2 (DCE Security UUID) is a largely deprecated\
+  \ format designed for early Distributed Computing Environments. It functions similarly\
+  \ to UUIDv1 by using a timestamp and a 48-bit Node ID, which may be an IEEE 802\
+  \ MAC address, while replacing part of the timestamp and clock sequence with a local\
+  \ domain identifier, such as a POSIX User ID or Group ID.\",\n                 \
+  \           \"Because UUIDv2 can expose Node ID information and is not designed\
+  \ to provide cryptographic unpredictability, it should not be used where security\
+  \ depends on unguessable identifiers, modern standards strongly advise against its\
+  \ use. Identifiers used for security or general unique tracking must guarantee high\
+  \ entropy and avoid leaking host system metadata.\",\n                         \
+  \   burp.api.montoya.scanner.audit.issues.AuditIssueSeverity.LOW,\n            \
+  \                requestResponse\r\n                        );\n               \
+  \         api().siteMap().add(newIssue);\n                        existingUrlIssues.add(newIssue);\n\
+  \                    }\n                    break;\n                case 3:\n  \
+  \                  notes.append(\"    Severity: [LOW]\\n    Issue:    Uses MD5 hash-based\
+  \ token. Predictable if namespace/name are known.\\n    Location: \").append(locStr).append(\"\
+  \\n\\n\");\n                    if (existingUrlIssues.stream().noneMatch(issue ->\
+  \ issue.name().equals(\"UUIDv3 detected - Uses MD5 hash-based token\"))) {\n   \
+  \                     burp.api.montoya.scanner.audit.issues.AuditIssue newIssue\
+  \ = burp.api.montoya.scanner.audit.issues.AuditIssue.auditIssue(\n             \
+  \               \"UUIDv3 detected - Uses MD5 hash-based token\",\n             \
+  \               \"The scanner detected the use of UUIDv3. This version relies on\
+  \ the MD5 hashing algorithm, which is cryptographically broken and vulnerable to\
+  \ collision attacks. Additionally, because UUIDv3 is deterministic, an attacker\
+  \ who knows or can determine the namespace and input string can independently reproduce\
+  \ the resulting UUID. If this version is used to generate session IDs, password\
+  \ reset links, or identifiers for sensitive API resources, attackers can calculate\
+  \ the UUIDs and bypass intended access controls. <br><br>- Location: \" + locStr\
+  \ + \"<br><br><b><i>This issue was reported by a UUID Analyzer & Generator.</i></b>\"\
+  , \n                            \"- If deterministic, name-based UUIDs are strictly\
+  \ required by the application's architecture, use an explicitly defined UUIDv8 profile\
+  \ based on SHA-256/SHA-512/SHA-3 rather than inventing a new v3/v5 format.<br>-\
+  \ If determinism is not required, replace UUIDv3 generation with UUIDv4.<br>- Never\
+  \ use deterministic UUIDs (v3 or v5) for security tokens, session IDs, or direct\
+  \ object reference lookups without implementing robust, independent authorization\
+  \ checks.<br>- If deterministic generation is strictly required for database modeling\
+  \ or deduplication, ensure these UUIDs are used purely as internal references and\
+  \ never as public-facing security keys.<br>- Enforce strict server-side authorization\
+  \ checks (such as RBAC) on all API endpoints that use UUIDs for object lookups,\
+  \ ensuring users only access resources they explicitly own.\",\n               \
+  \             originalUrl,\n                            burp.api.montoya.scanner.audit.issues.AuditIssueSeverity.LOW,\n\
+  \                            burp.api.montoya.scanner.audit.issues.AuditIssueConfidence.CERTAIN,\n\
+  \                            \"UUID version 3 (UUIDv3) is a deterministic identifier\
+  \ generated by hashing a namespace UUID and a specific name (or string) using the\
+  \ MD5 algorithm. Unlike random UUIDs, the exact same namespace and name combination\
+  \ will always produce the exact same UUID.\",\n                            \"Security\
+  \ standards mandate the deprecation of MD5 for any cryptographic or security-related\
+  \ purpose. Identifiers meant to be unguessable must rely on cryptographically secure\
+  \ randomness, and systems requiring deterministic identifiers must use stronger,\
+  \ modern hashing algorithms to prevent reverse-engineering or collisions.\",\n \
+  \                           burp.api.montoya.scanner.audit.issues.AuditIssueSeverity.LOW,\n\
+  \                            requestResponse\r\n                        );\n   \
+  \                     api().siteMap().add(newIssue);\n                        existingUrlIssues.add(newIssue);\n\
+  \                    }\n                    break;\n                case 4:\n  \
+  \                  notes.append(\"    Status:   Random/Pseudorandom format UUID\
+  \ detected. The UUID format alone cannot establish the quality of the underlying\
+  \ random-number generator. Ensure the implementation uses an approved CSPRNG and\
+  \ does not replace or weaken the library's secure random source.\\n    Location:\
+  \ \").append(locStr).append(\"\\n\\n\");\n                    break;\n         \
+  \       case 5:\n                    notes.append(\"    Severity: [LOW]\\n    Issue:\
+  \    Uses SHA-1 hash-based token. Predictable if namespace/name are known.\\n  \
+  \  Location: \").append(locStr).append(\"\\n\\n\");\n                    if (existingUrlIssues.stream().noneMatch(issue\
+  \ -> issue.name().equals(\"UUIDv5 detected - Uses SHA-1 hash-based token\"))) {\n\
+  \                        burp.api.montoya.scanner.audit.issues.AuditIssue newIssue\
+  \ = burp.api.montoya.scanner.audit.issues.AuditIssue.auditIssue(\n             \
+  \               \"UUIDv5 detected - Uses SHA-1 hash-based token\",\n           \
+  \                 \"The scanner detected the use of UUIDv5. Because this version\
+  \ is deterministic, it provides no cryptographic randomness. If an attacker discovers\
+  \ the namespace and knows the format of the input strings (e.g., email addresses\
+  \ or usernames), they can independently reproduce the resulting UUID. If these generated\
+  \ UUIDs are used as session tokens, password reset links, or identifiers for sensitive\
+  \ API resources, attackers can forge them to hijack accounts or bypass access controls.\
+  \ <br><br>- Location: \" + locStr + \"<br><br><b><i>This issue was reported by a\
+  \ UUID Analyzer & Generator.</i></b>\", \n                            \"- If deterministic\
+  \ name-based UUID generation is required and SHA-1 is not acceptable under organizational\
+  \ security policy, use an RFC 9562 UUIDv8 design based on an approved modern hash\
+  \ such as SHA-256, SHA-512.<br>- If determinism is not required, replace UUIDv5\
+  \ generation with UUIDv4.<br>- Never use deterministic UUIDs (v3 or v5) for security\
+  \ tokens, session IDs, or direct object reference lookups without implementing robust,\
+  \ independent authorization checks.<br>- If deterministic generation is strictly\
+  \ required for database modeling or deduplication, ensure these UUIDs are used purely\
+  \ as internal references and never as public-facing security keys.<br>- Enforce\
+  \ strict server-side authorization checks (such as RBAC) on all API endpoints that\
+  \ use UUIDs for object lookups, ensuring users only access resources they explicitly\
+  \ own.\",\n                            originalUrl,\n                          \
+  \  burp.api.montoya.scanner.audit.issues.AuditIssueSeverity.LOW,\n             \
+  \               burp.api.montoya.scanner.audit.issues.AuditIssueConfidence.CERTAIN,\n\
+  \                            \"UUID version 5 (UUIDv5) is a deterministic identifier\
+  \ generated by hashing a namespace UUID and a specific input string (name) using\
+  \ the SHA-1 algorithm. Unlike randomly generated UUIDs, providing the exact same\
+  \ namespace and name will always produce the exact same UUID.\",\n             \
+  \               \"Security tokens and access-bearing identifiers must rely on unpredictable,\
+  \ cryptographically secure randomness. Deterministic identifiers offer no entropy\
+  \ beyond the predictability of their input data and should never be treated as secrets\
+  \ or unguessable tokens.\",\n                            burp.api.montoya.scanner.audit.issues.AuditIssueSeverity.LOW,\n\
+  \                            requestResponse\r\n                        );\n   \
+  \                     api().siteMap().add(newIssue);\n                        existingUrlIssues.add(newIssue);\n\
+  \                    }\n                    break;\n                case 6:\n  \
+  \                  String macAddressNodeID6 = match.substring(24).replaceAll(\"\
+  (.{2})(?!$)\", \"$1:\");\n                    notes.append(\"    Severity: [LOW]\\\
+  n    Issue:    Time-ordered variant. Predictable token & Information Disclosure.\\\
+  n    Location: \").append(locStr).append(\"\\n    Leak:     MAC Address / Node ID\
+  \ -> \").append(macAddressNodeID6).append(\"\\n\");\n                    long msb6\
+  \ = foundUuid.getMostSignificantBits();\n                    long v6_ts = ((msb6\
+  \ >>> 16) << 12) | (msb6 & 0x0FFFL);\n                    long v6_unix = (v6_ts\
+  \ - UUID_EPOCH_OFFSET) / 10000L;\n                    int clockSeq6 = (int) ((foundUuid.getLeastSignificantBits()\
+  \ >>> 48) & 0x3FFFL);\n                    Instant v6_inst = Instant.ofEpochMilli(v6_unix);\n\
+  \                    notes.append(\"    Leak:     Clock Sequence -> \").append(clockSeq6).append(\"\
+  \\n    Leak:     Timestamp   -> \").append(v6_inst).append(\"\\n\\n\");\n      \
+  \              if (existingUrlIssues.stream().noneMatch(issue -> issue.name().equals(\"\
+  UUIDv6 detected - Time-ordered variant. Predictable token & Information Disclosure\"\
+  ) && issue.detail() != null && issue.detail().contains(macAddressNodeID6))) {\n\
+  \                        burp.api.montoya.scanner.audit.issues.AuditIssue newIssue\
+  \ = burp.api.montoya.scanner.audit.issues.AuditIssue.auditIssue(\n             \
+  \               \"UUIDv6 detected - Time-ordered variant. Predictable token & Information\
+  \ Disclosure\",\n                            \"The scanner detected the use of UUIDv6.\
+  \ While it offers performance benefits for database indexing, it inherits the critical\
+  \ security flaws of UUIDv1. The UUIDv6 Node ID may expose a host MAC address when\
+  \ an IEEE 802 address is used (Information Disclosure); alternatively, it may be\
+  \ a randomly derived Node ID. Additionally, its timestamp is time-ordered and therefore\
+  \ reveals generation time; this ordering should not be treated as cryptographic\
+  \ unpredictability when UUIDv6 values are exposed as security-sensitive tokens.\
+  \ If used for session IDs, password reset links, or direct resource identifiers,\
+  \ attackers can easily guess adjacent tokens to hijack accounts or access unauthorized\
+  \ data.<br><br>- Location: \" + locStr + \"<br><br>The UUIDv6 found in the request/response\
+  \ was generated and includes the following details:<br>- Mac Address / Node ID:\
+  \ \" + macAddressNodeID6 + \"<br>- Timestamp: \" + v6_inst + \"<br>- Clock Sequence:\
+  \ \" + clockSeq6 + \"<br><br><b><i>This issue was reported by a UUID Analyzer &\
+  \ Generator.</i></b>\", \n                            \"- If chronological database\
+  \ sorting is required, migrate the application to use UUIDv7, which combines a time-ordered\
+  \ timestamp with cryptographically secure random bits instead of exposing a MAC\
+  \ address.<br>- If time-ordering is not required and the UUID is used as a security-sensitive\
+  \ token, replace it with an identifier generated from a CSPRNG such as UUIDv4 or\
+  \ another appropriate high-entropy token format.<br>- Immediately invalidate any\
+  \ existing UUIDv6 tokens that function as security tokens, session IDs, or password\
+  \ reset links, and enforce strict server-side authorization checks (like RBAC) for\
+  \ object lookups.\",\n                            originalUrl,\n               \
+  \             burp.api.montoya.scanner.audit.issues.AuditIssueSeverity.LOW,\n  \
+  \                          burp.api.montoya.scanner.audit.issues.AuditIssueConfidence.CERTAIN,\n\
+  \                            \"UUID version 6 (UUIDv6) is a time-based identifier\
+  \ defined in RFC 9562. It improves upon UUIDv1 by rearranging the timestamp bits\
+  \ to allow for chronological database sorting. However, like UUIDv1, it still embeds\
+  \ the exact timestamp of creation alongside a 48-bit Node ID. The Node ID may be\
+  \ an IEEE 802 MAC address of the host machine generating it or a randomly derived\
+  \ value.\",\n                            \"Identifiers used in security contexts\
+  \ or public-facing APIs must be cryptographically random and should never leak underlying\
+  \ hardware configurations. Relying on sequential, time-based identifiers provides\
+  \ a false sense of security and opens the system to token-guessing attacks and reconnaissance.\"\
+  ,\n                            burp.api.montoya.scanner.audit.issues.AuditIssueSeverity.LOW,\n\
+  \                            requestResponse\r\n                        );\n   \
+  \                     api().siteMap().add(newIssue);\n                        existingUrlIssues.add(newIssue);\n\
+  \                    }\n                    break;\n                case 7:\n  \
+  \                  notes.append(\"    Severity: [INFO]\\n    Issue:    Unix Epoch\
+  \ time-ordered variant. Leaks generation timestamp.\\n    Location: \").append(locStr).append(\"\
+  \\n\");\n                    long v7_unix = foundUuid.getMostSignificantBits() >>>\
+  \ 16;\n                    if(v7_unix > 0L && v7_unix <= System.currentTimeMillis()\
+  \ + 315360000000L) {\n                        Instant v7_inst = Instant.ofEpochMilli(v7_unix);\n\
+  \                        notes.append(\"    Leak:     Timestamp      -> \").append(v7_inst).append(\"\
+  \\n\\n\");\n                        if (existingUrlIssues.stream().noneMatch(issue\
+  \ -> issue.name().equals(\"UUIDv7 detected - Unix Epoch time-ordered variant. Leaks\
+  \ generation timestamp\"))) {\n                            burp.api.montoya.scanner.audit.issues.AuditIssue\
+  \ newIssue = burp.api.montoya.scanner.audit.issues.AuditIssue.auditIssue(\n    \
+  \                            \"UUIDv7 detected - Unix Epoch time-ordered variant.\
+  \ Leaks generation timestamp\",\n                                \"The scanner detected\
+  \ the use of UUIDv7. Because the first 48 bits represent an exact Unix epoch timestamp,\
+  \ it leaks the precise millisecond of creation (Information Disclosure) and allows\
+  \ adversaries to map transactional velocity and system activity. Additionally, the\
+  \ effective unpredictability depends on the implementation's use of the remaining\
+  \ 74 bits. If an application treats UUIDv7 as an unguessable secret such as a session\
+  \ ID, bearer token, or password reset token, the predictable timestamp narrows the\
+  \ search space when an attacker is attempting to guess identifiers generated within\
+  \ a known time window.<br><br>- Location: \" + locStr + \"<br><br>The UUIDv7 found\
+  \ in the request/response was generated and includes the following details:<br>-\
+  \ Timestamp: \" + v7_inst + \"<br><br><b><i>This issue was reported by a UUID Analyzer\
+  \ & Generator.</i></b>\", \n                                \"- If time-ordering\
+  \ is not required, replace UUIDv7 with UUIDv4.<br>- Immediately invalidate any existing\
+  \ UUIDv7 tokens that function as security tokens, session IDs, or password reset\
+  \ links, and enforce strict server-side authorization checks (like RBAC) for object\
+  \ lookups.<br>- Do not use UUIDv7 as a bearer authentication token, password-reset\
+  \ secret, session secret, or other value whose security depends on unpredictability;\
+  \ replace them with high-entropy cryptographic strings (at least 128 to 256 bits\
+  \ of CSPRNG entropy).<br>- If UUIDv7 is used as a public API resource identifier,\
+  \ implement strict server-side authorization checks (such as RBAC or ABAC) to prevent\
+  \ Insecure Direct Object Reference (IDOR) attacks, rather than relying on the token\
+  \ being unguessable.<br>- Ensure the underlying UUIDv7 implementation derives its\
+  \ remaining random bits from a CSPRNG rather than an insecure pseudo-random generator.\"\
+  ,\n                                originalUrl,\n                              \
+  \  burp.api.montoya.scanner.audit.issues.AuditIssueSeverity.INFORMATION,\n     \
+  \                           burp.api.montoya.scanner.audit.issues.AuditIssueConfidence.CERTAIN,\n\
+  \                                \"UUID version 7 (UUIDv7), introduced in RFC 9562,\
+  \ is an identifier that combines a 48-bit Unix timestamp (in milliseconds) with\
+  \ 74 bits of pseudo-random data/counter bits. It is primarily designed to improve\
+  \ database indexing performance through chronological ordering while avoiding the\
+  \ hardware MAC address leakage seen in UUIDv1 and UUIDv6.\",\n                 \
+  \               \"UUIDv7 is designed for time-ordered identifiers and can be appropriate\
+  \ for database identifiers when the implementation and application usage satisfy\
+  \ the required uniqueness and security properties. Identifiers used as cryptographic\
+  \ secrets, access tokens, or capability URLs must rely entirely on high-entropy\
+  \ randomness generated by a Cryptographically Secure Pseudo-Random Number Generator\
+  \ (CSPRNG) with no predictable metadata.\",\n                                burp.api.montoya.scanner.audit.issues.AuditIssueSeverity.INFORMATION,\n\
+  \                                requestResponse\r\n                           \
+  \ );\n                            api().siteMap().add(newIssue);\n             \
+  \               existingUrlIssues.add(newIssue);\n                        }\n  \
+  \                  } else {\n                        notes.append(\"    Leak:  \
+  \   Timestamp      -> [Invalid Epoch (Likely Fake/Fuzzed UUID)]\\n\\n\");\n    \
+  \                }\n                    break;\n                case 8:\n      \
+  \              notes.append(\"    Severity: [INFO]\\n    Status:   Experimental\
+  \ / Vendor-Specific Use Cases (RFC 9562). Manual review required.\\n    Location:\
+  \ \").append(locStr).append(\"\\n\\n\");\n                    if (existingUrlIssues.stream().noneMatch(issue\
+  \ -> issue.name().equals(\"UUIDv8 detected - Experimental / Vendor-Specific Use\
+  \ Cases - Custom Format\"))) {\n                        burp.api.montoya.scanner.audit.issues.AuditIssue\
+  \ newIssue = burp.api.montoya.scanner.audit.issues.AuditIssue.auditIssue(\n    \
+  \                        \"UUIDv8 detected - Experimental / Vendor-Specific Use\
+  \ Cases - Custom Format\",\n                            \"The scanner detected the\
+  \ use of UUIDv8. Because UUIDv8 leaves the application-defined bits to the implementation,\
+  \ the security and privacy properties of those bits cannot be determined from the\
+  \ UUID version alone. It is impossible to guarantee its collision resistance, cryptographic\
+  \ randomness, or privacy without auditing the specific source code that generates\
+  \ it. The custom implementation might inadvertently leak sensitive business logic,\
+  \ User IDs, physical network addresses, or be highly predictable, opening the application\
+  \ to token guessing or Information Disclosure vulnerabilities. <br><br>- Location:\
+  \ \" + locStr + \"<br><br><b><i>This issue was reported by a UUID Analyzer & Generator.</i></b>\"\
+  , \n                            \"- Audit the custom UUIDv8 generation logic to\
+  \ ensure the embedded 122 bits do not leak Personally Identifiable Information (PII),\
+  \ internal network topologies (such as MAC addresses), or easily predictable sequential\
+  \ data.<br>- If a custom UUID layout is not required by the application architecture,\
+  \ use an appropriate standardized UUID version; use UUIDv4 when cryptographically\
+  \ strong random identifiers are required.<br>- Never use a UUIDv8 as an unauthenticated\
+  \ security token, password reset link, or session ID unless the custom implementation\
+  \ relies heavily on a Cryptographically Secure Pseudo-Random Number Generator (CSPRNG).<br>-\
+  \ Ensure endpoints looking up UUIDv8s enforce strict access control checks.\",\n\
+  \                            originalUrl,\n                            burp.api.montoya.scanner.audit.issues.AuditIssueSeverity.INFORMATION,\n\
+  \                            burp.api.montoya.scanner.audit.issues.AuditIssueConfidence.CERTAIN,\n\
+  \                            \"UUID version 8 (UUIDv8), introduced in RFC 9562,\
+  \ provides an entirely custom, vendor-specific format. UUIDv8 reserves the UUID\
+  \ version field for version 8 and uses the RFC variant field, the remaining application-defined\
+  \ bits are available for a custom layout. The remaining 122 bits can be utilized\
+  \ however the developer chooses whether that involves combining custom timestamps,\
+  \ shard IDs, tenant identifiers, MAC addresses, or random data.\",\n           \
+  \                 \"Security tokens, session identifiers, and safe database keys\
+  \ require known, proven cryptographic properties and collision resistance. Relying\
+  \ on a custom identifier format introduces significant risk unless the bespoke generation\
+  \ logic has been rigorously modeled for entropy and data privacy.\",\n         \
+  \                   burp.api.montoya.scanner.audit.issues.AuditIssueSeverity.INFORMATION,\n\
+  \                            requestResponse\n                        );\n     \
+  \                   api().siteMap().add(newIssue);\n                        existingUrlIssues.add(newIssue);\n\
+  \                    }\n                    break;\n                default:\n \
+  \                   notes.append(\"    Severity: [INFO]\\n    Status:   \").append((version\
+  \ >= 9 && version <= 15) ? \"Version \" + version + \" is reserved for future definition\
+  \ by RFC 9562.\" : \"Unknown UUID version detected.\").append(\"\\n    Location:\
+  \ \").append(locStr).append(\"\\n\\n\");\n                    break;\n         \
+  \   }\n        } catch (IllegalArgumentException e) {\n                logging.logToOutput(\"\
+  [ERROR] Invalid UUID candidate: \" + match);\n        }\n    }\n}\r\n// Generate\
+  \ and Replace Placeholders\nboolean placeholderFound = false;\r\nMap<String, String>\
+  \ replacementMap = new HashMap<>();\r\nif (hasPlaceholder) {\n    Matcher placeholderMatcher\
+  \ = placeholderPattern.matcher(originalReq);\n    final java.security.SecureRandom\
+  \ uuidSecureRandom = new java.security.SecureRandom();\n    \n    while (placeholderMatcher.find())\
+  \ {\n        String fullMatch = placeholderMatcher.group(0);\n        placeholderFound\
+  \ = true;\n        if (replacementMap.containsKey(fullMatch)) continue;\n      \
+  \  String explicitVersionStr = placeholderMatcher.group(1);\n        String seedStr\
+  \ = placeholderMatcher.group(2); // Extracts the seed if a colon is used\n     \
+  \   int versionToGenerate = (explicitVersionStr != null) ? Integer.parseInt(explicitVersionStr)\
+  \ : detectedVersion; \n        String newUuid;\n        boolean isSpecialSeed =\
+  \ (seedStr != null && (seedStr.equalsIgnoreCase(\"nil\") || seedStr.equalsIgnoreCase(\"\
+  max\")));\n        if (isSpecialSeed && explicitVersionStr != null) {\n        \
+  \    logging.logToOutput(\"[ERROR] Special seeds cannot be combined with a specific\
+  \ UUID version (e.g., <UUIDv\" + explicitVersionStr + \":nil>). Use <UUID:nil> or\
+  \ <UUID:max>.\");\n            continue;\n        }\n        if (seedStr != null\
+  \ && !isSpecialSeed && versionToGenerate != 3 && versionToGenerate != 5) {\n   \
+  \         logging.logToOutput(\"[ERROR] Seed syntax is supported only for UUIDv3/UUIDv5.\"\
+  );\n            continue;\n        }\n        if (isSpecialSeed) {\n           \
+  \ newUuid = seedStr.equalsIgnoreCase(\"nil\") ? \"00000000-0000-0000-0000-000000000000\"\
+  \ : \"ffffffff-ffff-ffff-ffff-ffffffffffff\";\n        } else if (versionToGenerate\
+  \ == 1 || versionToGenerate == 6 ) {\n            long timestamp = UUID_EPOCH_OFFSET\
+  \ + (System.currentTimeMillis() * 10000L);\n            long msb = (versionToGenerate\
+  \ == 1) ? ((timestamp & 0xFFFFFFFFL) << 32) | (((timestamp >>> 32) & 0xFFFFL) <<\
+  \ 16) | 0x1000L | ((timestamp >>> 48) & 0x0FFFL) : ((timestamp >>> 12) << 16) |\
+  \ 0x6000L | (timestamp & 0x0FFFL);\n            long lsb = (uuidSecureRandom.nextLong()\
+  \ & 0x3FFFFFFFFFFFFFFFL) | 0x8000010000000000L;\n            newUuid = new UUID(msb,\
+  \ lsb).toString();\n        } else if (versionToGenerate == 2) {\n            logging.logToOutput(\"\
+  [ERROR] UUIDv2 generation is not implemented. RFC 9562 reserves v2 for DCE Security\
+  \ UUIDs.\");\n            continue;\n        } else if (versionToGenerate == 3 ||\
+  \ versionToGenerate == 5) {\n            // Extract namespace and name from arguments\n\
+  \            if (seedStr == null || seedStr.indexOf(':') <= 0) {\n\t           \
+  \ logging.logToOutput(\"[ERROR] UUIDv\" + versionToGenerate + \" requires: <UUIDv\"\
+  \ + versionToGenerate + \":namespace:name>\");\n\t            continue;\n      \
+  \      }\n            int separator = seedStr.indexOf(':');\n            String\
+  \ namespaceStr = seedStr.substring(0, separator);\n            switch (namespaceStr.toUpperCase(Locale.ROOT))\
+  \ {\n                case \"DNS\": namespaceStr = \"6ba7b810-9dad-11d1-80b4-00c04fd430c8\"\
+  ; break;\n                case \"URL\": namespaceStr = \"6ba7b811-9dad-11d1-80b4-00c04fd430c8\"\
+  ; break;\n                case \"OID\": namespaceStr = \"6ba7b812-9dad-11d1-80b4-00c04fd430c8\"\
+  ; break;\n                case \"X500\": namespaceStr = \"6ba7b814-9dad-11d1-80b4-00c04fd430c8\"\
+  ; break;\n            }\n            String nameStr = seedStr.substring(separator\
+  \ + 1);\n            // Validate namespace\n            if (!uuidPattern.matcher(namespaceStr).matches())\
+  \ {\n                logging.logToOutput(\"[ERROR] Invalid UUID namespace for UUIDv\"\
+  \ + versionToGenerate + \": \" + namespaceStr);\n                continue;\n   \
+  \         }\n            try {\n                UUID namespaceUuid = UUID.fromString(namespaceStr);\n\
+  \                java.nio.ByteBuffer namespaceBuffer = java.nio.ByteBuffer.allocate(16);\n\
+  \                namespaceBuffer.putLong(namespaceUuid.getMostSignificantBits());\n\
+  \                namespaceBuffer.putLong(namespaceUuid.getLeastSignificantBits());\n\
+  \                java.security.MessageDigest md = java.security.MessageDigest.getInstance(versionToGenerate\
+  \ == 3 ? \"MD5\" : \"SHA-1\"); //Note: MD5/SHA-1 are mandated by RFC 9562 for v3/v5\
+  \ generation.\n                md.update(namespaceBuffer.array());\n           \
+  \     md.update(nameStr.getBytes(java.nio.charset.StandardCharsets.UTF_8));\n  \
+  \              byte[] hash = md.digest();\n                hash[6] = (byte) ((hash[6]\
+  \ & 0x0F) | (versionToGenerate == 3 ? 0x30 : 0x50)); // Set version to 3 or 5\n\
+  \                hash[8]  = (byte) ((hash[8] & 0x3f) | 0x80); // Set variant to\
+  \ RFC 9562\n                java.nio.ByteBuffer hashBuffer = java.nio.ByteBuffer.wrap(hash);\n\
+  \                newUuid = new UUID(hashBuffer.getLong(), hashBuffer.getLong()).toString();\n\
+  \            } catch (Exception e) {\n                logging.logToOutput(\"[ERROR]\
+  \ Failed to generate UUIDv\" + versionToGenerate + \": \" + e.getMessage());\n \
+  \               continue;\n            }\n        } else if (versionToGenerate ==\
+  \ 4) {\n            newUuid = UUID.randomUUID().toString();\n        } else if (versionToGenerate\
+  \ == 7) {\n            try {\n                java.lang.reflect.Method ofEpochMillis\
+  \ = UUID.class.getMethod(\"ofEpochMillis\", long.class);\n                newUuid\
+  \ = ofEpochMillis.invoke(null, System.currentTimeMillis()).toString();\n       \
+  \     } catch (Exception e) {\n                // Fallback to manual bitwise generation\
+  \ if the method does not exist in this Java environment\n                long msb\
+  \ = (System.currentTimeMillis() << 16) | (uuidSecureRandom.nextInt() & 0xFFFFL);\n\
+  \                msb = (msb & 0xFFFFFFFFFFFF0FFFL) | 0x0000000000007000L; // Set\
+  \ version 7\n                long lsb = (uuidSecureRandom.nextLong() & 0x3FFFFFFFFFFFFFFFL)\
+  \ | 0x8000000000000000L; // Set variant 10\n                newUuid = new UUID(msb,\
+  \ lsb).toString();\n            }\n        } else if (versionToGenerate == 8) {\n\
+  \            long msb = (uuidSecureRandom.nextLong() & 0xFFFFFFFFFFFF0FFFL) | 0x0000000000008000L;\
+  \ // Set version 8\n            long lsb = (uuidSecureRandom.nextLong() & 0x3FFFFFFFFFFFFFFFL)\
+  \ | 0x8000000000000000L; // Set variant 10\n            newUuid = new UUID(msb,\
+  \ lsb).toString();\n        } else {\n            continue;\n        }\n       \
+  \ if (fullMatch.startsWith(\"<UUID\")) newUuid = newUuid.toUpperCase(Locale.ROOT);\n\
+  \        replacementMap.put(fullMatch, newUuid);\n        logging.logToOutput(\"\
+  [-] Replaced \" + fullMatch + ((versionToGenerate == 3 || versionToGenerate == 5)\
+  \ ? \" (True Hash)\" : isSpecialSeed ? \" (Special)\" : \" (Version: \" + versionToGenerate\
+  \ + \")\") + \" with: \" + newUuid);\n    }\n    // Replacement in one go\n    if\
+  \ (!replacementMap.isEmpty()) {\n        httpEditor.requestPane().set(placeholderPattern.matcher(originalReq).replaceAll(mr\
+  \ -> replacementMap.getOrDefault(mr.group(), mr.group())));\n    }\n}\r\n\r\n//\
+  \ Output results to the Console\r\nif (!seenUuids.isEmpty()) {\n    logging.logToOutput(\"\
+  \\n[-] Passive Analysis Results (Generated placeholder UUIDs were excluded):\\n[INFO]\
+  \ Total UUIDs Detected: \" + seenUuids.size() + \"\\n[INFO] New Issues Created:\
+  \ \" + ((existingUrlIssues != null) ? (existingUrlIssues.size() - initialCount)\
+  \ : 0) + \"\\n\" + notes.toString().trim());\r\n} else if (!replacementMap.isEmpty())\
+  \ {\n    logging.logToOutput(\"\\n[-] Passive Analysis Results:\\n[INFO] No actual\
+  \ UUIDs detected in the request/response for analysis.\");\n} else if (placeholderFound)\
+  \ {\n    logging.logToOutput(\"\\n[INFO] UUID placeholders were detected, but no\
+  \ placeholder was replaced.\");\n} else {\n    logging.logToOutput(\"\\n[INFO] No\
+  \ placeholders <UUID> replaced and no UUIDs found to scan.\");\r\n}\r\nlogging.logToOutput(\"\
+  \\n[INFO] Script executed in \" + (System.currentTimeMillis() - startTime) + \"\
+  ms\\n----- UUID Analyzer & Generator Completed -----\\n\");"
